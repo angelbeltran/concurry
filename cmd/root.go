@@ -51,7 +51,8 @@ func concurryCmdRunfunc(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid source type name: %s", sourceTypeName)
 	}
 
-	pkgs, err := packages.Load(&packages.Config{Mode: packages.LoadAllSyntax}, "github.com/angelbeltran/concurry/cmd")
+	// load package
+	pkgs, err := packages.Load(&packages.Config{Mode: packages.LoadAllSyntax}, ".")
 	if err != nil {
 		return fmt.Errorf("failed to load package: %w", err)
 	}
