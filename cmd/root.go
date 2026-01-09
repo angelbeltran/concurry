@@ -215,10 +215,10 @@ func generateTypeDeclarationAndConstructor() []byte {
 	return []byte(fmt.Sprintf(`
 type %s struct {
 	ctx context.Context
-	%s
+	*%s
 }
 
-func new%s(ctx context.Context, v %s) *%s {
+func new%s(ctx context.Context, v *%s) *%s {
 	return &%s{
 		ctx: ctx,
 		%s: v,
@@ -386,17 +386,17 @@ type someType struct {
 	C int
 }
 
-func (st someType) someMethod(ctx context.Context, x string) {
+func (st *someType) someMethod(ctx context.Context, x string) {
 }
 
-func (st someType) someMethod2(ctx context.Context) (int, error) {
+func (st *someType) someMethod2(ctx context.Context) (int, error) {
 	return 1, nil
 }
 
-func (st someType) someMethod3(ctx context.Context) *strings.Builder {
+func (st *someType) someMethod3(ctx context.Context) *strings.Builder {
 	return nil
 }
 
-func (st someType) someMethod4(string) error {
+func (st *someType) someMethod4(string) error {
 	return nil
 }
