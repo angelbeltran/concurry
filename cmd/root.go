@@ -1,51 +1,402 @@
 /*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-
+Copyright © 2026 Angel Beltran beltranbeaverdam@gmail.com
 */
 package cmd
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"go/types"
 	"os"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/tools/go/packages"
 )
 
+var (
+	sourceTypeName string
+	outputFileName string
+	outputTypeName string
+)
 
-
-// rootCmd represents the base command when called without any subcommands
-var rootCmd = &cobra.Command{
+var concurryCmd = &cobra.Command{
 	Use:   "concurry",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+	Short: "Go CLI that curries methods starting with context.Context",
+	Long: `Concurry is a CLI library for Go that generates struct types that wrap existing type,
+exposing the same public methods but whose methods whose first arguments are context.Contexts
+having them curried.`,
+	RunE: concurryCmdRunfunc,
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
-	err := rootCmd.Execute()
+func concurryCmdRunfunc(cmd *cobra.Command, args []string) error {
+	goTypeExp := regexp.MustCompile("[a-zA-Z][0-9a-zA-Z_]*")
+
+	// validate 'source'
+	if !goTypeExp.MatchString(sourceTypeName) {
+		return fmt.Errorf("invalid source type name: %s", sourceTypeName)
+	}
+
+	if outputFileName == "" {
+		outputFileName = getDefaultOutputFilename()
+	}
+
+	// validate 'name'
+	if outputTypeName == "" {
+		outputTypeName = sourceTypeName + "WithContext"
+	} else if !goTypeExp.MatchString(sourceTypeName) {
+		return fmt.Errorf("invalid source type name: %s", sourceTypeName)
+	}
+
+	pkgs, err := packages.Load(&packages.Config{Mode: packages.LoadAllSyntax}, "github.com/angelbeltran/concurry/cmd")
 	if err != nil {
+		return fmt.Errorf("failed to load package: %w", err)
+	}
+
+	if len(pkgs) == 0 {
+		return fmt.Errorf("no packages found: %w", err)
+	}
+	if len(pkgs) > 1 {
+		names := make([]string, len(pkgs))
+		for i, p := range pkgs {
+			names[i] = p.String()
+		}
+		return fmt.Errorf("multiple packages found: %s", strings.Join(names, ", "))
+	}
+
+	p := pkgs[0]
+
+	if len(p.Errors) > 0 {
+		errs := make([]error, len(p.Errors))
+		for i, err := range p.Errors {
+			errs[i] = err
+		}
+		return errors.Join(errs...)
+	}
+	if len(p.TypeErrors) > 0 {
+		errs := make([]error, len(p.TypeErrors))
+		for i, err := range p.TypeErrors {
+			errs[i] = err
+		}
+		return errors.Join(errs...)
+	}
+
+	// find named type
+
+	obj := p.Types.Scope().Lookup(sourceTypeName)
+	if obj == nil {
+		return fmt.Errorf("no type %s found", sourceTypeName)
+	}
+
+	namedType, ok := obj.Type().(*types.Named)
+	if !ok {
+		return fmt.Errorf("type must be a named type: %s", obj.Type())
+	}
+
+	// type declaration
+
+	decBuf := generateTypeDeclarationAndConstructor()
+
+	// type methods
+
+	methodsBuf, methodImports := generateOutputTypeMethods(namedType)
+
+	// imports
+
+	importsBuf := generateImportsExpression([]string{"context"}, methodImports)
+
+	// write file
+
+	file, err := os.Create(outputFileName)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+
+	if _, err = file.Write(append(
+		append(
+			append(
+				[]byte(fmt.Sprintf("package %s\n\n", p.Types.Name())),
+				importsBuf...,
+			),
+			decBuf...,
+		),
+		methodsBuf...,
+	)); err != nil {
+		return fmt.Errorf("error occured while writing output file: %w", err)
+	}
+
+	return nil
+}
+
+func getDefaultOutputFilename() string {
+	alphanumExp := regexp.MustCompile(`[0-9a-zA-Z]+`)
+	alphanumPhrases := alphanumExp.FindAllString(sourceTypeName, -1)
+
+	alphaOrNumWordExp := regexp.MustCompile(`([a-zA-Z]+)|([0-9]+)`)
+	upperCamelcaseWordExp := regexp.MustCompile(`[A-Z][a-z]+`)
+	uppercasePrefixExp := regexp.MustCompile(`^[A-Z]+`)
+	digitsExp := regexp.MustCompile(`[0-9]`)
+	snakeCasedAlphaNumPhrases := make([]string, len(alphanumPhrases))
+	for i, phrase := range alphanumPhrases {
+		alphaOrNumPhrases := alphaOrNumWordExp.FindAllString(phrase, -1)
+
+		words := make([]string, 0, len(alphaOrNumPhrases))
+		for _, phrase := range alphaOrNumPhrases {
+			// capture numberic phrase
+			if digitsExp.MatchString(phrase) {
+				words = append(words, phrase)
+				continue
+			}
+
+			// capture starting uppercase word
+			if matches := uppercasePrefixExp.FindAllString(phrase, 1); len(matches) > 0 {
+				if match := matches[0]; len(match) > 1 {
+					if len(match) == len(phrase) {
+						words = append(words, phrase)
+						continue
+					}
+
+					prefix := match[:len(match)-1]
+					words = append(words, prefix)
+
+					phrase = phrase[len(prefix):]
+				}
+			}
+
+			// capture intermediate uppercase words
+			remainder := phrase
+			for _, w := range upperCamelcaseWordExp.FindAllString(phrase, -1) {
+				if index := strings.Index(remainder, w); index == 0 {
+					remainder = remainder[len(w):]
+					words = append(words, w)
+				} else {
+					uppercaseWord := remainder[:index]
+					remainder = remainder[index+len(w):]
+					words = append(words, uppercaseWord, w)
+				}
+			}
+
+			// capture ending uppercase word
+			if len(remainder) > 0 {
+				words = append(words, remainder)
+			}
+		}
+
+		snakeCasedAlphaNumPhrases[i] = strings.ToLower(strings.Join(words, "_"))
+	}
+
+	underscoresExp := regexp.MustCompile(`_+`)
+	underscoresWords := underscoresExp.FindAllString(sourceTypeName, -1)
+
+	if endsWithUnderscore := strings.HasSuffix(sourceTypeName, "_"); !endsWithUnderscore {
+		underscoresWords = append(underscoresWords, "")
+	}
+
+	var res string
+	for i, phrase := range snakeCasedAlphaNumPhrases {
+		res += phrase + underscoresWords[i]
+	}
+
+	return res + "_with_context.go"
+}
+
+func capitalize(s string) string {
+	if len(s) == 0 {
+		return ""
+	}
+
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func generateTypeDeclarationAndConstructor() []byte {
+	return []byte(fmt.Sprintf(`
+type %s struct {
+	ctx context.Context
+	%s
+}
+
+func new%s(ctx context.Context, v %s) *%s {
+	return &%s{
+		ctx: ctx,
+		%s: v,
+	}
+}
+`,
+		outputTypeName,
+		sourceTypeName,
+		capitalize(outputTypeName),
+		sourceTypeName,
+		outputTypeName,
+		outputTypeName,
+		sourceTypeName,
+	))
+}
+
+func generateOutputTypeMethods(namedType *types.Named) (buf []byte, imports []string) {
+	for fn := range namedType.Methods() {
+		params := fn.Signature().Params()
+		numParams := params.Len()
+		if numParams == 0 {
+			continue
+		}
+
+		if params.At(0).Type().String() != "context.Context" {
+			continue
+		}
+
+		buf = append(buf, fmt.Sprintf(`
+func (v_ctx *%s) %s(`,
+			outputTypeName,
+			fn.Name(),
+		)...)
+
+		// params
+
+		for i := range numParams - 1 {
+			param := params.At(i + 1)
+
+			typeName := param.Type().String()
+			if index := strings.LastIndex(typeName, "."); index != -1 {
+				typePrefix := typeName[:index]
+				pkgName := strings.TrimPrefix(typePrefix, "*")
+				imports = append(imports, pkgName)
+			}
+			buf = append(buf, fmt.Sprintf("%s %s", param.Name(), typeName)...)
+			if i < numParams-2 {
+				buf = append(buf, ", "...)
+			}
+		}
+		buf = append(buf, ')')
+
+		// results
+
+		results := fn.Signature().Results()
+		numResults := results.Len()
+		if numResults > 0 {
+			buf = append(buf, ' ')
+			if numResults > 1 {
+				buf = append(buf, '(')
+			}
+
+			for i := range numResults {
+				res := results.At(i)
+
+				typeName := res.Type().String()
+				if index := strings.LastIndex(typeName, "."); index != -1 {
+					typePrefix := typeName[:index]
+					pkgName := strings.TrimPrefix(typePrefix, "*")
+					imports = append(imports, pkgName)
+				}
+				buf = append(buf, typeName...)
+				if i < numResults-1 {
+					buf = append(buf, ", "...)
+				}
+			}
+			if numResults > 1 {
+				buf = append(buf, ')')
+			}
+		}
+
+		// body
+
+		buf = append(buf, fmt.Sprintf(` {
+	`)...)
+
+		if numResults > 0 {
+			buf = append(buf, "return "...)
+		}
+
+		buf = append(buf, fmt.Sprintf(
+			"v_ctx.%s.%s(v_ctx.ctx",
+			sourceTypeName,
+			fn.Name(),
+		)...)
+
+		for i := range numParams - 1 {
+			param := params.At(i + 1)
+
+			buf = append(buf, fmt.Sprintf(", %s", param.Name())...)
+		}
+		buf = append(buf, `)
+}
+`...)
+	}
+
+	return buf, imports
+}
+
+func generateImportsExpression(importLists ...[]string) []byte {
+	importSet := make(map[string]struct{}, len(importLists))
+
+	for _, vs := range importLists {
+		for _, v := range vs {
+			importSet[v] = struct{}{}
+		}
+	}
+
+	imports := make([]string, 0, len(importSet))
+	for v := range importSet {
+		imports = append(imports, v)
+	}
+
+	slices.Sort(imports)
+
+	quotedImports := make([]string, len(imports))
+	for i, v := range imports {
+		quotedImports[i] = fmt.Sprintf("%q", v)
+	}
+
+	importSequence := strings.Join(quotedImports, "\n\t")
+
+	return []byte(fmt.Sprintf(`import (
+	%s
+)
+`,
+		importSequence,
+	))
+}
+
+// This is called by main.main(). It only needs to happen once to the concurryCmd.
+func Execute() {
+	err := concurryCmd.Execute()
+	if err != nil {
+		os.Stderr.Write([]byte(err.Error()))
 		os.Exit(1)
 	}
 }
 
 func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
+	flags := concurryCmd.Flags()
 
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.concurry.yaml)")
+	flags.StringVarP(&sourceTypeName, "source", "s", "", "Source type")
+	flags.StringVarP(&outputFileName, "output", "o", "", "Output file")
+	flags.StringVarP(&outputTypeName, "name", "n", "", "Output type name")
 
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	concurryCmd.MarkFlagRequired("source")
 }
 
+// test type
 
+type someType struct {
+	A string
+	B bool
+	C int
+}
+
+func (st someType) someMethod(ctx context.Context, x string) {
+}
+
+func (st someType) someMethod2(ctx context.Context) (int, error) {
+	return 1, nil
+}
+
+func (st someType) someMethod3(ctx context.Context) *strings.Builder {
+	return nil
+}
+
+func (st someType) someMethod4(string) error {
+	return nil
+}

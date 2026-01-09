@@ -1,6 +1,5 @@
 /*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-
+Copyright © 2026 Angel Beltran beltranbeaverdam@gmail.com
 */
 package main
 
