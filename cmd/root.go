@@ -122,14 +122,14 @@ package %s
 
 	// write imports
 
-	methodsBuf, hasWithContextMethod, methodImports := generateOutputTypeMethods(p.PkgPath, namedType)
+	methodsBuf, methodImports := generateOutputTypeMethods(p.PkgPath, namedType)
 	if _, err = file.Write(generateImportsExpression(p.PkgPath, []string{"context"}, methodImports)); err != nil {
 		return fmt.Errorf("error occured while writing output file: %w", err)
 	}
 
 	// type declaration
 
-	decBuf := generateTypeDeclarationAndConstructor(hasWithContextMethod)
+	decBuf := generateTypeDeclarationAndConstructor()
 
 	if _, err = file.Write(decBuf); err != nil {
 		return fmt.Errorf("error occured while writing output file: %w", err)
@@ -224,7 +224,7 @@ func capitalize(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-func generateTypeDeclarationAndConstructor(skipWithContextMethod bool) []byte {
+func generateTypeDeclarationAndConstructor() []byte {
 	isOutputTypeExported := strings.ToUpper(outputTypeName[0:1]) == outputTypeName[0:1]
 
 	var termNew string
@@ -235,19 +235,6 @@ func generateTypeDeclarationAndConstructor(skipWithContextMethod bool) []byte {
 	}
 
 	constructorName := fmt.Sprintf("%s%s", termNew, capitalize(outputTypeName))
-
-	var withContextMethod string
-	if !skipWithContextMethod {
-		withContextMethod = fmt.Sprintf(`
-func (v *%s) WithContext(ctx context.Context) *%s {
-	return %s(ctx, v)
-}
-`,
-			sourceTypeName,
-			outputTypeName,
-			constructorName,
-		)
-	}
 
 	return []byte(fmt.Sprintf(`
 type %s struct {
@@ -261,7 +248,7 @@ func %s(ctx context.Context, v *%s) *%s {
 		%s: v,
 	}
 }
-%s`,
+`,
 		outputTypeName,
 		sourceTypeName,
 		constructorName,
@@ -269,14 +256,12 @@ func %s(ctx context.Context, v *%s) *%s {
 		outputTypeName,
 		outputTypeName,
 		sourceTypeName,
-		withContextMethod,
 	))
 }
 
-func generateOutputTypeMethods(pkgPath string, namedType *types.Named) (buf []byte, hasWithContextMethod bool, imports []string) {
+func generateOutputTypeMethods(pkgPath string, namedType *types.Named) (buf []byte, imports []string) {
 	for fn := range namedType.Methods() {
 		if fn.Name() == "WithContext" {
-			hasWithContextMethod = true
 			continue
 		}
 
@@ -362,7 +347,7 @@ func (v_ctx *%s) %s(`,
 `...)
 	}
 
-	return buf, hasWithContextMethod, imports
+	return buf, imports
 }
 
 func cleanTypeExpression(pkgPath string, param *types.Var) (typeName string, imports []string) {
