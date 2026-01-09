@@ -86,8 +86,8 @@ func Test_concurryCmdRunfunc_defaults(t *testing.T) {
 
 			concurryCmdRunfunc(nil, nil)
 
-			assert.Equal(t, test.Expected.OutputFileName, outputFileName, "unexpected output file name generated")
-			assert.Equal(t, test.Expected.OutputTypeName, outputTypeName, "unexpected output type name generated")
+			assert.Equal(t, test.Expected.OutputFileName, normalizedOutputFileName, "unexpected output file name generated")
+			assert.Equal(t, test.Expected.OutputTypeName, normalizedOutputTypeName, "unexpected output type name generated")
 		})
 	}
 }
