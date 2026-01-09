@@ -7,10 +7,10 @@ This cli generates go types that wrap targeted types with the wrapper types havi
 ### Installation
 
 ```
-go install github.con/angelbeltran/concurry
+go install github.com/angelbeltran/concurry
 ```
 
 **If using go 1.24+, to add as a tool dependency**
 ```
-go get -tool github.con/angelbeltran/concurry
+go get -tool github.com/angelbeltran/concurry
 ```
