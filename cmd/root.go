@@ -122,14 +122,14 @@ package %s
 
 	// write imports
 
-	methodsBuf, methodImports := generateOutputTypeMethods(p.PkgPath, namedType)
+	methodsBuf, hasWithContextMethod, methodImports := generateOutputTypeMethods(p.PkgPath, namedType)
 	if _, err = file.Write(generateImportsExpression(p.PkgPath, []string{"context"}, methodImports)); err != nil {
 		return fmt.Errorf("error occured while writing output file: %w", err)
 	}
 
 	// type declaration
 
-	decBuf := generateTypeDeclarationAndConstructor()
+	decBuf := generateTypeDeclarationAndConstructor(hasWithContextMethod)
 
 	if _, err = file.Write(decBuf); err != nil {
 		return fmt.Errorf("error occured while writing output file: %w", err)
@@ -224,7 +224,7 @@ func capitalize(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-func generateTypeDeclarationAndConstructor() []byte {
+func generateTypeDeclarationAndConstructor(skipWithContextMethod bool) []byte {
 	isOutputTypeExported := strings.ToUpper(outputTypeName[0:1]) == outputTypeName[0:1]
 
 	var termNew string
@@ -235,6 +235,19 @@ func generateTypeDeclarationAndConstructor() []byte {
 	}
 
 	constructorName := fmt.Sprintf("%s%s", termNew, capitalize(outputTypeName))
+
+	var withContextMethod string
+	if !skipWithContextMethod {
+		withContextMethod = fmt.Sprintf(`
+func (v *%s) WithContext(ctx context.Context) *%s {
+	return %s(ctx, v)
+}
+`,
+			sourceTypeName,
+			outputTypeName,
+			constructorName,
+		)
+	}
 
 	return []byte(fmt.Sprintf(`
 type %s struct {
@@ -248,11 +261,7 @@ func %s(ctx context.Context, v *%s) *%s {
 		%s: v,
 	}
 }
-
-func (v *%s) WithContext(ctx context.Context) *%s {
-	return %s(ctx, v)
-}
-`,
+%s`,
 		outputTypeName,
 		sourceTypeName,
 		constructorName,
@@ -260,14 +269,17 @@ func (v *%s) WithContext(ctx context.Context) *%s {
 		outputTypeName,
 		outputTypeName,
 		sourceTypeName,
-		sourceTypeName,
-		outputTypeName,
-		constructorName,
+		withContextMethod,
 	))
 }
 
-func generateOutputTypeMethods(pkgPath string, namedType *types.Named) (buf []byte, imports []string) {
+func generateOutputTypeMethods(pkgPath string, namedType *types.Named) (buf []byte, hasWithContextMethod bool, imports []string) {
 	for fn := range namedType.Methods() {
+		if fn.Name() == "WithContext" {
+			hasWithContextMethod = true
+			continue
+		}
+
 		params := fn.Signature().Params()
 		numParams := params.Len()
 		if numParams == 0 {
@@ -350,7 +362,7 @@ func (v_ctx *%s) %s(`,
 `...)
 	}
 
-	return buf, imports
+	return buf, hasWithContextMethod, imports
 }
 
 func cleanTypeExpression(pkgPath string, param *types.Var) (typeName string, imports []string) {
@@ -459,5 +471,9 @@ func (st *someType) someMethod3(ctx context.Context) *strings.Builder {
 }
 
 func (st *someType) someMethod4(string) error {
+	return nil
+}
+
+func (st *someType) WithContext(context.Context) error {
 	return nil
 }
